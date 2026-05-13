@@ -1,8 +1,21 @@
 import cv2
 import numpy as np
 import math
+import sys
+import os
+import time
+
+# python_packages 폴더의 db_manager 모듈 임포트 경로 설정
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'python_packages')))
+from db_manager import DBManager
 
 cap = cv2.VideoCapture(1) # 애니캠
+
+# DB 객체 생성 (데이터베이스 파일은 최상위 폴더에 생성됨)
+db = DBManager('../robot_arm.db')
+
+last_log_time = 0
+cooldown_seconds = 3.0 # 동일 객체 인식 후 3초간 DB 저장 무시
 
 while True:
     ret, frame = cap.read()
@@ -22,26 +35,33 @@ while True:
         area = cv2.contourArea(cnt)
         x, y, w, h = cv2.boundingRect(cnt)
         
-        # 1. 바닥 노이즈 완벽 차단! (너무 크거나, 너무 길쭉한 건 무시)
         aspect_ratio = float(w) / h
         if 1000 < area < 40000 and 0.5 < aspect_ratio < 1.5:
             
-            # 2. 새로운 필살기: 물체를 감싸는 '가상의 완벽한 원' 찾기
             (cx, cy), radius = cv2.minEnclosingCircle(cnt)
             perfect_circle_area = math.pi * (radius ** 2)
             
             if perfect_circle_area == 0: continue
             
-            # 3. 점수 계산: (실제 탁구공 면적 / 가상의 완벽한 원 면적)
             circle_ratio = area / perfect_circle_area
             
-            # 4. 판별 (보통 정상 공은 0.85 이상, 눌린 공은 0.80 이하로 뚝 떨어집니다)
+            # DB 저장 로직 (쿨다운 적용)
+            current_time = time.time()
+            
             if circle_ratio > 0.95:
                 cv2.drawContours(frame, [cnt], -1, (0, 255, 0), 3)
                 cv2.putText(frame, f"Normal ({circle_ratio:.2f})", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                
+                if current_time - last_log_time > cooldown_seconds:
+                    db.insert_log("Normal", "A")
+                    last_log_time = current_time
             else:
                 cv2.drawContours(frame, [cnt], -1, (0, 0, 255), 3)
                 cv2.putText(frame, f"Damaged ({circle_ratio:.2f})", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                
+                if current_time - last_log_time > cooldown_seconds:
+                    db.insert_log("Damaged", "B")
+                    last_log_time = current_time
 
     cv2.imshow("Smart Ball Check", frame)
     cv2.imshow("Computer Vision", thresh)
@@ -50,3 +70,4 @@ while True:
 
 cap.release()
 cv2.destroyAllWindows()
+db.close() # 프로그램 종료 시 DB 연결 해제
