@@ -9,7 +9,7 @@ import time
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'python_packages')))
 from db_manager import DBManager
 
-cap = cv2.VideoCapture(1) # 애니캠
+cap = cv2.VideoCapture(0) # 애니캠
 
 # DB 객체 생성 (데이터베이스 파일은 최상위 폴더에 생성됨)
 db = DBManager('../robot_arm.db')
