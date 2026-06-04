@@ -6,13 +6,15 @@ import os
 import time
 
 # python_packages 폴더의 db_manager 모듈 임포트 경로 설정
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'python_packages')))
+package_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'python_packages'))
+sys.path.append(package_dir)
 from db_manager import DBManager
 
 cap = cv2.VideoCapture(0) # 애니캠
 
-# DB 객체 생성 (데이터베이스 파일은 최상위 폴더에 생성됨)
-db = DBManager('../robot_arm.db')
+# DB 객체 생성 (auto4.py와 동일한 python_packages/robot_arm.db 사용)
+db_path = os.path.join(package_dir, 'robot_arm.db')
+db = DBManager(db_path)
 
 last_log_time = 0
 cooldown_seconds = 3.0 # 동일 객체 인식 후 3초간 DB 저장 무시
