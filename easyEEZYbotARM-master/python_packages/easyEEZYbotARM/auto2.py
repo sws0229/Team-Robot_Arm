@@ -108,6 +108,8 @@ cooldown_seconds = 8.0 # 수거 동작(약 6~7초) 중 중복 인식을 막기 �
 while True:
     ret, frame = cap.read()
     if not ret: break # 프레임을 못 가져오면 종료
+
+    frame = cv2.flip(frame, -1)
     
     # 화면에 3x3 그리드 구분선 그리기 (시각화 목적)
     cv2.line(frame, (grid_w, 0), (grid_w, frame_height), (255, 255, 0), 1)

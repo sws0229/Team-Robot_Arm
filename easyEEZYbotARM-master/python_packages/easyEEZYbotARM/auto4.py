@@ -39,9 +39,13 @@ HOVER_J3      = 90
 DISCARD_RIGHT_J1 = 105  # 오른쪽 폐기함 (45+60)
 NORMAL_LEFT_J1   = 0    # 왼쪽 정상함 (45-45, 최소값 0)
 
+# 탁구공을 내려놓을 때 사용할 고정 J2, J3 각도
+DROP_J2 = 180
+DROP_J3 = 50
+
 lookup_table = {
-    (0, 0): (160,  20, 200, 70), (0, 1): (160,  45, 200, 60), (0, 2): (160,  70, 200, 70),
-    (1, 0): (160,  20, 180, 50), (1, 1): (160,  45, 180, 40), (1, 2): (160,  70, 180, 50),
+    (0, 0): (160,  20, 190, 60), (0, 1): (160,  45, 190, 60), (0, 2): (160,  70, 190, 60),
+    (1, 0): (160,  20, 180, 50), (1, 1): (160,  45, 180, 50), (1, 2): (160,  70, 180, 50),
     (2, 0): (160,  20, 160, 30), (2, 1): (160,  45, 160, 20), (2, 2): (160,  70, 160, 30),
 }
 
@@ -54,7 +58,6 @@ def send_robot_command(instruction, ee, j1, j2, j3, move_time=1000):
 
 # ==========================================
 # 3. [핵심 수정] sleep 대신 keep_alive_sleep 사용
-# → 대기 중에도 OpenCV 창을 계속 업데이트해서 freeze 방지
 # ==========================================
 def keep_alive_sleep(seconds, cap=None):
     """
@@ -67,7 +70,8 @@ def keep_alive_sleep(seconds, cap=None):
         if cap is not None:
             ret, frame = cap.read()
             if ret:
-                frame = cv2.flip(frame, 1)   # 좌우 반전만
+                # ✅ [수정] 상하좌우 동시 반전 (마주보는 셋업)
+                frame = cv2.flip(frame, -1)
                 cv2.putText(frame, "Robot Moving...",
                             (10, 50), cv2.FONT_HERSHEY_SIMPLEX,
                             1.2, (0, 165, 255), 3)
@@ -97,11 +101,13 @@ def pick_and_place(row, col, is_defective, cap=None):
     keep_alive_sleep(1.2, cap)
     send_robot_command("M", GRIPPER_CLOSE, drop_j1, HOVER_J2, HOVER_J3, 1000)
     keep_alive_sleep(1.2, cap)
-    # 정상품도 불량품처럼 수그려서 내려놓기 (공중 투하 방지)
-    send_robot_command("M", GRIPPER_CLOSE, drop_j1, j2_down,  j3_down,  1000)
+    
+    # 정상품/불량품 모두 내려놓을 때 고정된 DROP_J2, DROP_J3 각도 사용
+    send_robot_command("M", GRIPPER_CLOSE, drop_j1, DROP_J2,  DROP_J3,  1000)
     keep_alive_sleep(1.2, cap)
-    send_robot_command("M", GRIPPER_OPEN,  drop_j1, j2_down,  j3_down,   500)
+    send_robot_command("M", GRIPPER_OPEN,  drop_j1, DROP_J2,  DROP_J3,   500)
     keep_alive_sleep(0.8, cap)
+    
     # 내려놓고 다시 호버 높이로 복귀
     send_robot_command("M", GRIPPER_OPEN,  drop_j1, HOVER_J2, HOVER_J3, 1000)
     keep_alive_sleep(1.0, cap)
@@ -177,7 +183,7 @@ fail_count       = 0
 FAIL_LIMIT       = 30
 last_action_time = 0.0
 
-print("스마트 품질 검사 시스템 가동 (ver4 fix2)")
+print("스마트 품질 검사 시스템 가동 (ver4 fix3)")
 print(f"  밝기 임계값: {BRIGHT_THRESHOLD}  |  흠집 기준: {DENT_THRESHOLD}px  |  쿨다운: {COOLDOWN_SEC}s")
 
 while True:
@@ -193,7 +199,8 @@ while True:
         continue
     fail_count = 0
 
-    frame = cv2.flip(frame, 1)   # 좌우 반전만 (상하 반전 제거)
+    # ✅ [수정] 상하좌우 동시 반전 (마주보는 셋업)
+    frame = cv2.flip(frame, -1)
 
     for xp in [grid_w, grid_w * 2]:
         cv2.line(frame, (xp, 0), (xp, frame_height), (255, 255, 0), 1)
@@ -240,7 +247,6 @@ while True:
             is_defective = False
             defect_msg   = ""
 
-
         row = min(int(cy) // grid_h, 2)
         col = min(int(cx) // grid_w, 2)
         x   = int(cx) - int(radius)
@@ -258,11 +264,11 @@ while True:
         wait_msg = (" 불량 탁구공 발견 1초 뒤 수거를 시작합니다..."
                     if is_defective else " 정상 탁구공 확인 1초 뒤 이동을 시작합니다...")
         print(wait_msg)
-        keep_alive_sleep(1.0, cap)  # [수정] time.sleep → keep_alive_sleep
+        keep_alive_sleep(1.0, cap)
 
         db.insert_log("Damaged" if is_defective else "Normal",
                       "B" if is_defective else "A")
-        pick_and_place(row, col, is_defective=is_defective, cap=cap)  # [수정] cap 전달
+        pick_and_place(row, col, is_defective=is_defective, cap=cap)
 
         last_action_time = time.time()
         break
