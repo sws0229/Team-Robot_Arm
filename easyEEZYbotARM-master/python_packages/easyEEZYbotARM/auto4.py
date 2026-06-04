@@ -5,6 +5,7 @@ import time
 import serial
 import sys
 import os
+from datetime import datetime
 
 # ==========================================
 # 0. 경로 설정 및 DB 임포트
@@ -83,35 +84,67 @@ def keep_alive_sleep(seconds, cap=None):
 # 4. 양방향 분류 (Pick and Place) 자동화 시퀀스
 # ==========================================
 def pick_and_place(row, col, is_defective, cap=None):
+    """
+    분류 시퀀스 실행 후 결과 dict 반환.
+    DB 의 update_action_result(**result) 에 그대로 전달 가능한 키를 담는다.
+    """
+    started = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    result = {
+        'target_j1': None,
+        'command_text': None,
+        'action_started': started,
+        'action_finished': None,
+        'simulation': 1 if ser is None else 0,
+        'success': 0,
+        'error_msg': None,
+    }
+
     target_angles = lookup_table.get((row, col))
     if not target_angles:
-        return
+        result['error_msg'] = f'invalid grid ({row},{col})'
+        result['action_finished'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        return result
+
     _, j1, j2_down, j3_down = target_angles
     drop_j1 = DISCARD_RIGHT_J1 if is_defective else NORMAL_LEFT_J1
+    result['target_j1'] = drop_j1
     direction = f"오른쪽({drop_j1}도) 폐기" if is_defective else f"왼쪽({drop_j1}도) 이동"
     print(f"[{row},{col}] {'불량품' if is_defective else '정상품'} 수거 시작 -> {direction}!")
 
-    send_robot_command("M", GRIPPER_OPEN,  j1,      HOVER_J2, HOVER_J3, 1000)
-    keep_alive_sleep(1.2, cap)
-    send_robot_command("M", GRIPPER_OPEN,  j1,      j2_down,  j3_down,  1000)
-    keep_alive_sleep(1.2, cap)
-    send_robot_command("M", GRIPPER_CLOSE, j1,      j2_down,  j3_down,   500)
-    keep_alive_sleep(0.8, cap)
-    send_robot_command("M", GRIPPER_CLOSE, j1,      HOVER_J2, HOVER_J3, 1000)
-    keep_alive_sleep(1.2, cap)
-    send_robot_command("M", GRIPPER_CLOSE, drop_j1, HOVER_J2, HOVER_J3, 1000)
-    keep_alive_sleep(1.2, cap)
-    
-    # 정상품/불량품 모두 내려놓을 때 고정된 DROP_J2, DROP_J3 각도 사용
-    send_robot_command("M", GRIPPER_CLOSE, drop_j1, DROP_J2,  DROP_J3,  1000)
-    keep_alive_sleep(1.2, cap)
-    send_robot_command("M", GRIPPER_OPEN,  drop_j1, DROP_J2,  DROP_J3,   500)
-    keep_alive_sleep(0.8, cap)
-    
-    # 내려놓고 다시 호버 높이로 복귀
-    send_robot_command("M", GRIPPER_OPEN,  drop_j1, HOVER_J2, HOVER_J3, 1000)
-    keep_alive_sleep(1.0, cap)
-    print("분류 작업 완료! 대기 상태로 복귀.")
+    try:
+        send_robot_command("M", GRIPPER_OPEN,  j1,      HOVER_J2, HOVER_J3, 1000)
+        keep_alive_sleep(1.2, cap)
+        send_robot_command("M", GRIPPER_OPEN,  j1,      j2_down,  j3_down,  1000)
+        keep_alive_sleep(1.2, cap)
+        send_robot_command("M", GRIPPER_CLOSE, j1,      j2_down,  j3_down,   500)
+        keep_alive_sleep(0.8, cap)
+        send_robot_command("M", GRIPPER_CLOSE, j1,      HOVER_J2, HOVER_J3, 1000)
+        keep_alive_sleep(1.2, cap)
+        send_robot_command("M", GRIPPER_CLOSE, drop_j1, HOVER_J2, HOVER_J3, 1000)
+        keep_alive_sleep(1.2, cap)
+
+        # 정상품/불량품 모두 내려놓을 때 고정된 DROP_J2, DROP_J3 각도 사용
+        send_robot_command("M", GRIPPER_CLOSE, drop_j1, DROP_J2,  DROP_J3,  1000)
+        keep_alive_sleep(1.2, cap)
+        send_robot_command("M", GRIPPER_OPEN,  drop_j1, DROP_J2,  DROP_J3,   500)
+        keep_alive_sleep(0.8, cap)
+
+        # 내려놓고 다시 호버 높이로 복귀
+        send_robot_command("M", GRIPPER_OPEN,  drop_j1, HOVER_J2, HOVER_J3, 1000)
+        keep_alive_sleep(1.0, cap)
+
+        # 시퀀스 마지막 명령 문자열 (대표값으로 저장)
+        result['command_text'] = (f"<M,{GRIPPER_OPEN},{drop_j1},{HOVER_J2},"
+                                  f"{HOVER_J3},1000,1000,1000,1000>")
+        result['success'] = 1
+        print("분류 작업 완료! 대기 상태로 복귀.")
+    except Exception as e:
+        result['success'] = 0
+        result['error_msg'] = str(e)
+        print(f"[오류] 동작 실패: {e}")
+
+    result['action_finished'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    return result
 
 # ==========================================
 # 5. 튜닝 파라미터
@@ -237,11 +270,14 @@ while True:
 
         print(f" 스캔 중... 원형도: {circle_ratio:.2f} | 반지름: {int(radius)}px | 흠집: {edge_px}px")
 
+        defect_reason = None  # 'Shape' / 'Dent' / None
         if circle_ratio < 0.90:
             is_defective = True
+            defect_reason = 'Shape'
             defect_msg   = f"Shape ({circle_ratio:.2f})"
         elif edge_px > DENT_THRESHOLD:
             is_defective = True
+            defect_reason = 'Dent'
             defect_msg   = f"Dent ({edge_px}px)"
         else:
             is_defective = False
@@ -266,9 +302,25 @@ while True:
         print(wait_msg)
         keep_alive_sleep(1.0, cap)
 
-        db.insert_log("Damaged" if is_defective else "Normal",
-                      "B" if is_defective else "A")
-        pick_and_place(row, col, is_defective=is_defective, cap=cap)
+        # 1) 검출 정보 먼저 INSERT, log id 받기
+        log_id = db.insert_detection(
+            status        = "Damaged" if is_defective else "Normal",
+            action        = "B" if is_defective else "A",
+            defect_reason = defect_reason,
+            circle_ratio  = round(float(circle_ratio), 4),
+            radius_px     = int(radius),
+            edge_px       = int(edge_px),
+            grid_row      = int(row),
+            grid_col      = int(col),
+            pixel_cx      = int(cx),
+            pixel_cy      = int(cy),
+        )
+
+        # 2) 분류 시퀀스 실행 → 결과 dict 반환
+        action_result = pick_and_place(row, col, is_defective=is_defective, cap=cap)
+
+        # 3) 결과를 같은 row 에 UPDATE
+        db.update_action_result(log_id, **action_result)
 
         last_action_time = time.time()
         break
