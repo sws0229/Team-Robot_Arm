@@ -40,8 +40,10 @@ db = DBManager(db_path)
 
 try:
     # COM3 포트, 9600bps 보드레이트로 아두이노와 시리얼 연결
-    # timeout=1: 응답 없을 때 1초 후 포기
-    ser = serial.Serial('COM3', 9600, timeout=1)
+    # timeout=1       : 응답 없을 때 1초 후 포기 (읽기 전용)
+    # write_timeout=2 : ser.write() 가 OS 버퍼 가득 참 등으로 막히면 2초 후 예외 발생
+    #                   → 무한 freeze 방지, 예외는 pick_and_place 의 except 가 받아서 안전 복귀
+    ser = serial.Serial('COM3', 9600, timeout=1, write_timeout=2)
 
     # 아두이노가 초기화되는 시간(약 2초) 동안 대기
     time.sleep(2)
@@ -243,42 +245,47 @@ def pick_and_place(row, col, is_defective, cap=None):
 
     try:
         # ── 픽업 시퀀스 ──────────────────────────────────────────
+        # [수정] keep_alive_sleep 시간을 move_time 대비 1.5배로 늘림
+        # 이유: 기존 1.2s 는 move_time=1000ms 와 차이가 0.2초밖에 안 돼서
+        #      아두이노 서보가 실제 동작에 더 걸리면 매 사이클마다 미세하게 뒤처짐 →
+        #      누적되어 시리얼 버퍼 가득 → ser.write() 가 막혀서 freeze 발생.
+        #      충분한 여유 마진을 둬서 절대 따라잡힐 수 없는 상태로 유지.
 
         # 1단계: 그리퍼 열고, 공 위 호버 높이로 이동
         send_robot_command("M", GRIPPER_OPEN, j1, HOVER_J2, HOVER_J3, 1000)
-        keep_alive_sleep(1.2, cap)  # 관절 이동 완료까지 대기
+        keep_alive_sleep(1.5, cap)  # [수정] 1.2 → 1.5
 
         # 2단계: 그리퍼 열린 채로 공에 닿는 높이까지 내려가기
         send_robot_command("M", GRIPPER_OPEN, j1, j2_down, j3_down, 1000)
-        keep_alive_sleep(1.2, cap)
+        keep_alive_sleep(1.5, cap)  # [수정] 1.2 → 1.5
 
         # 3단계: 그리퍼 닫아 공 잡기 (짧은 이동 시간 500ms)
         send_robot_command("M", GRIPPER_CLOSE, j1, j2_down, j3_down, 500)
-        keep_alive_sleep(0.8, cap)  # 그리퍼가 확실히 닫힐 때까지 짧게 대기
+        keep_alive_sleep(1.0, cap)  # [수정] 0.8 → 1.0
 
         # 4단계: 공을 잡은 채로 호버 높이로 들어올리기
         send_robot_command("M", GRIPPER_CLOSE, j1, HOVER_J2, HOVER_J3, 1000)
-        keep_alive_sleep(1.2, cap)
+        keep_alive_sleep(1.5, cap)  # [수정] 1.2 → 1.5
 
         # ── 이동 및 배치 시퀀스 ──────────────────────────────────
 
         # 5단계: 목적지 방향(drop_j1)으로 베이스 회전, 호버 높이 유지
         send_robot_command("M", GRIPPER_CLOSE, drop_j1, HOVER_J2, HOVER_J3, 1000)
-        keep_alive_sleep(1.2, cap)
+        keep_alive_sleep(1.5, cap)  # [수정] 1.2 → 1.5
 
         # 6단계: 목적지 바구니 위에서 DROP 높이(낮은 자세)로 내려가기
         send_robot_command("M", GRIPPER_CLOSE, drop_j1, DROP_J2, DROP_J3, 1000)
-        keep_alive_sleep(1.2, cap)
+        keep_alive_sleep(1.5, cap)  # [수정] 1.2 → 1.5
 
         # 7단계: 그리퍼 열어 공 내려놓기
         send_robot_command("M", GRIPPER_OPEN, drop_j1, DROP_J2, DROP_J3, 500)
-        keep_alive_sleep(0.8, cap)
+        keep_alive_sleep(1.0, cap)  # [수정] 0.8 → 1.0
 
         # ── 홈 복귀 ──────────────────────────────────────────────
 
         # 8단계: 그리퍼 열린 채로 호버 높이로 복귀 (다음 동작 대기 자세)
         send_robot_command("M", GRIPPER_OPEN, drop_j1, HOVER_J2, HOVER_J3, 1000)
-        keep_alive_sleep(1.0, cap)
+        keep_alive_sleep(1.5, cap)  # [수정] 1.0 → 1.5
 
         # DB 저장용 마지막 명령 문자열 기록
         result['command_text'] = (f"<M,{GRIPPER_OPEN},{drop_j1},{HOVER_J2},"
@@ -297,7 +304,7 @@ def pick_and_place(row, col, is_defective, cap=None):
         print("[복구] 안전 복귀 명령 전송 시도...")
         try:
             send_robot_command("M", GRIPPER_OPEN, j1, HOVER_J2, HOVER_J3, 1000)
-            keep_alive_sleep(1.2, cap)
+            keep_alive_sleep(1.5, cap)  # [수정] 1.2 → 1.5
         except Exception as recover_err:
             # 복구 명령마저 실패하면 사람이 직접 개입해야 함
             print(f"[복구 실패] 수동 개입이 필요합니다: {recover_err}")
