@@ -1,6 +1,7 @@
 # ============================================================
 # 스마트 품질 검사 시스템 (auto.py) - 기말 발표용 조명 방어 버전
 # 카메라로 탁구공을 감지 → 불량 판별 → 로봇팔로 자동 분류
+# [수정] 어두운 환경 대응: HSV V값 완화 + 캐니 폴백 + circle_ratio 완화
 # ============================================================
 
 import cv2          
@@ -204,16 +205,17 @@ def pick_and_place(row, col, is_defective, cap=None):
 # 6. 튜닝 파라미터 (비전 검사 기준값)
 # ==========================================
 
-# [수정] 조명 변동 대비용 HSV 색상 범위 설정 (주황색 기준)
-LOWER_ORANGE = np.array([0, 70, 50])    # H, S, V 하한선 (발표장 환경에 따라 V를 낮춤)
+# [수정] 어두운 환경 대응: V 하한 50→30, S 하한 70→40으로 완화
+LOWER_ORANGE = np.array([0,  40, 30])   # H, S, V 하한선
 UPPER_ORANGE = np.array([25, 255, 255]) # H, S, V 상한선
 
 MIN_BALL_AREA    = 1500   
 MAX_BALL_AREA    = 30000  
-CIRCLE_RATIO_MIN = 0.50
+
+# [수정] 어두울 때 마스크가 덜 깔끔해져 circle_ratio가 낮게 나오므로 0.50→0.40으로 완화
+CIRCLE_RATIO_MIN = 0.40
 
 ELLIPSE_RATIO_THRESHOLD  = 0.94  
-# 밝기 표준편차 기준은 더 이상 판정에 직접 사용하지 않습니다. (오작동 방지)
 BRIGHTNESS_STD_THRESHOLD = 60.0  
 DENT_THRESHOLD = 50  
 COOLDOWN_SEC = 7.0    
@@ -224,30 +226,42 @@ clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 # 7. 헬퍼 함수 (비전 검사)
 # ==========================================
 
-# [수정] 밝기 기준(gray)이 아닌 컬러 프레임(HSV) 기반으로 탁구공 추출
 def find_bright_ball_candidates(frame):
     """
-    조명 변화에 강한 HSV 색상 공간을 이용하여 탁구공 후보 윤곽선을 찾습니다.
+    1차: HSV 색상 기반 탐지 (주황색 마스크)
+    2차: HSV 실패 시 캐니 엣지 기반 폴백 (어두운 환경 대응)
     """
-    # 1. BGR에서 HSV로 변환
+    # --- 1차: HSV 색상 마스크 ---
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-
-    # 2. 탁구공 색상 범위로 마스크 생성
     orange_mask = cv2.inRange(hsv, LOWER_ORANGE, UPPER_ORANGE)
 
-    # 3. 모폴로지 연산으로 노이즈 및 구멍 제거
-    kernel_open  = np.ones((5,  5),  np.uint8)  
-    kernel_close = np.ones((11, 11), np.uint8)  
-
+    kernel_open  = np.ones((5,  5),  np.uint8)
+    kernel_close = np.ones((11, 11), np.uint8)
     orange_mask = cv2.morphologyEx(orange_mask, cv2.MORPH_OPEN,  kernel_open)
     orange_mask = cv2.morphologyEx(orange_mask, cv2.MORPH_CLOSE, kernel_close)
 
-    # 디버그용: 처리된 마스크 창 표시 (발표장 세팅 시 확인 필수)
     cv2.imshow("Orange Ball Mask (HSV)", orange_mask)
 
-    # 4. 윤곽선 검출 후 반환
     contours, _ = cv2.findContours(orange_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    return contours
+
+    # 유효 면적 윤곽선이 하나라도 있으면 HSV 결과 반환
+    valid_hsv = [c for c in contours if MIN_BALL_AREA < cv2.contourArea(c) < MAX_BALL_AREA]
+    if valid_hsv:
+        return valid_hsv
+
+    # --- 2차 폴백: 어두울 때 캐니 엣지 기반 원 탐지 ---
+    print("[폴백] HSV 마스크 실패 → 캐니 엣지 기반 탐지로 전환")
+    gray    = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    gray_eq = clahe.apply(gray)
+    blurred = cv2.GaussianBlur(gray_eq, (5, 5), 0)
+    edge_mask = cv2.Canny(blurred, 40, 100)
+
+    # 엣지를 팽창·채워서 윤곽 영역 생성
+    dilated = cv2.dilate(edge_mask, np.ones((5, 5), np.uint8), iterations=2)
+    filled  = cv2.morphologyEx(dilated, cv2.MORPH_CLOSE, np.ones((15, 15), np.uint8))
+
+    fallback_contours, _ = cv2.findContours(filled, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    return fallback_contours
 
 def is_valid_ball(cnt):
     area = cv2.contourArea(cnt)
@@ -345,7 +359,6 @@ def judge_defect(cnt, gray_enhanced, edges, cx, cy, radius, circle_ratio):
 cap = cv2.VideoCapture(1)
 
 # [추가] 다이소 카메라 자동 노출(Auto Exposure) 끄기
-# 기종에 따라 CAP_PROP_AUTO_EXPOSURE 지원이 안 될 수도 있으니 콘솔 창 경고를 무시해도 됩니다.
 cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25) 
 cap.set(cv2.CAP_PROP_EXPOSURE, -5)        
 
@@ -372,6 +385,7 @@ print("스마트 품질 검사 시스템 가동 (ver_Final - 조명 최적화)")
 print(f"  타원 비율 기준: < {ELLIPSE_RATIO_THRESHOLD}")
 print(f"  밝기 std 기준: 비활성화됨 (오탐지 방지)")
 print(f"  엣지 기준(보조): > {DENT_THRESHOLD}px  |  쿨다운: {COOLDOWN_SEC}s")
+print(f"  HSV 하한: {LOWER_ORANGE}  |  circle_ratio 최소: {CIRCLE_RATIO_MIN}")
 
 try:
     while True:  
@@ -413,7 +427,7 @@ try:
                 break
             continue  
 
-        # [수정] 원본 프레임을 넘겨주어 HSV 기반으로 탐지하도록 변경
+        # [수정] 원본 프레임을 넘겨주어 HSV → 캐니 폴백 순으로 탐지
         contours = find_bright_ball_candidates(frame)
 
         ball_queue = []  
