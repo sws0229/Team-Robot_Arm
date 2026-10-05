@@ -14,6 +14,8 @@
 # 조작법
 #   자동 분류: 공을 놓고 손을 치운 뒤 영상 창에서 SPACE, 종료는 Q 또는 Esc
 #   피드백 수집: 실제 정상은 N, 실제 불량은 D, 종료는 Q 또는 Esc
+#   카메라 조정: S로 설정 창 열기, 창을 닫고 영상 창에서 R로 노출값 다시 조회
+#   노출 조정 후 자동 분류를 재개하려면 SPACE로 다시 승인한다.
 # ============================================================
 
 import argparse
@@ -173,8 +175,8 @@ def parse_args():
     parser.add_argument(
         "--exposure",
         type=float,
-        default=-7.0,
-        help="수동 노출값 (기본값: -7)",
+        default=-8.0,
+        help="수동 노출값 (기본값: -8)",
     )
     parser.add_argument(
         "--auto-exposure",
@@ -229,7 +231,105 @@ def choose_camera_index(argument_value):
         return DEFAULT_CAMERA_INDEX
 
 
-def open_camera(camera_index, auto_exposure, exposure):
+def camera_backend(capture):
+    try:
+        return capture.getBackendName().upper()
+    except (cv2.error, AttributeError):
+        return "UNKNOWN"
+
+
+def request_camera_property(capture, property_id, value):
+    # 성공 응답은 설정 요청의 반환값일 뿐 실제 영상 반영을 보장하지 않는다.
+    try:
+        return bool(capture.set(property_id, value))
+    except cv2.error as error:
+        print(f"[카메라 설정 경고] {error}")
+        return False
+
+
+def refresh_camera_exposure(capture, diagnostics, verbose=False):
+    # 조회만 수행하며 설정 창에서 사용자가 바꾼 값을 덮어쓰지 않는다.
+    try:
+        value = float(capture.get(cv2.CAP_PROP_EXPOSURE))
+        diagnostics["reported_exposure"] = value if math.isfinite(value) else None
+    except (cv2.error, TypeError, ValueError):
+        diagnostics["reported_exposure"] = None
+
+    if verbose:
+        value = diagnostics["reported_exposure"]
+        reported = "조회 실패" if value is None else f"{value:g}"
+        print(
+            f"[카메라 노출] 연결 방식={diagnostics['backend']} | "
+            f"시작 요청={diagnostics['requested']} | 드라이버 조회값={reported}"
+        )
+        print(
+            "  조회값도 드라이버가 제공하는 값입니다. 미지원 값일 수 있으므로 "
+            "공의 표면 무늬가 실제 영상에서 보이는지도 확인하세요."
+        )
+
+
+def configure_camera_exposure(capture, auto_exposure, exposure):
+    backend = camera_backend(capture)
+    diagnostics = {
+        "backend": backend,
+        "requested": "AUTO" if auto_exposure else f"MANUAL {exposure:g}",
+        "reported_exposure": None,
+    }
+    # Windows 연결 방식에서는 0이 수동, 1이 자동 노출 요청이다.
+    if backend in ("DSHOW", "MSMF"):
+        mode_ok = request_camera_property(
+            capture, cv2.CAP_PROP_AUTO_EXPOSURE, 1.0 if auto_exposure else 0.0
+        )
+        mode = "자동" if auto_exposure else "수동"
+        result = "성공 응답" if mode_ok else "실패/미지원 응답"
+        print(f"[카메라 설정] {mode} 노출 모드 요청: {result}")
+    else:
+        print(f"[카메라 설정] {backend}: 자동/수동 전환을 확인할 수 없습니다.")
+
+    if not auto_exposure:
+        exposure_ok = request_camera_property(capture, cv2.CAP_PROP_EXPOSURE, exposure)
+        result = "성공 응답" if exposure_ok else "실패/미지원 응답"
+        print(f"[카메라 설정] 노출 {exposure:g} 요청: {result}")
+    print("  성공 응답만으로 실제 적용을 확정할 수는 없습니다.")
+    return diagnostics
+
+
+def open_camera_settings(capture, diagnostics):
+    # 설정 창은 DirectShow에서만 요청한다. 다른 연결 방식으로 재연결하지 않는다.
+    if diagnostics["backend"] != "DSHOW":
+        print("[카메라 설정] 현재 연결 방식은 S 키 설정 창을 지원하지 않습니다.")
+        return False
+    if not request_camera_property(capture, cv2.CAP_PROP_SETTINGS, 0):
+        print("[카메라 설정] 설정 창 요청에 실패했습니다. 카메라/드라이버 지원을 확인하세요.")
+        return False
+    print(
+        "[카메라 설정] 창 열기를 요청했습니다. 카메라 제어(Camera Control)에서 "
+        "노출(Exposure)의 자동(Auto)을 끄고 조정하세요."
+    )
+    print("  창을 닫은 뒤 영상 창을 클릭하고 R을 눌러 조회값을 갱신하세요.")
+    return True
+
+
+def draw_camera_status(display_frame, diagnostics):
+    # 카메라 영상 아래에만 상태표를 붙인다. 인식/저장용 원본과 격자 위치는 유지한다.
+    height, width = display_frame.shape[:2]
+    output = np.zeros((height + 48, width, 3), dtype=display_frame.dtype)
+    output[:height] = display_frame
+    value = diagnostics["reported_exposure"]
+    reported = "N/A" if value is None else f"{value:g}"
+    lines = (
+        f"{diagnostics['backend']} | Start: {diagnostics['requested']} | Read: {reported}",
+        "S: camera settings   R: refresh readback (not verified)",
+    )
+    for index, line in enumerate(lines):
+        cv2.putText(
+            output, line, (10, height + 18 + index * 22),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 220, 255), 1,
+        )
+    return output
+
+
+def open_camera(camera_index, auto_exposure, exposure, diagnostics=None):
     # Windows에서는 DirectShow를 먼저 사용하고, 실패하면 기본 방식으로 재시도한다.
     if os.name == "nt":
         capture = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
@@ -241,12 +341,12 @@ def open_camera(camera_index, auto_exposure, exposure):
         capture = cv2.VideoCapture(camera_index)
 
     if not capture.isOpened():
+        capture.release()
         return None
 
-    if not auto_exposure:
-        # 지원하지 않는 카메라는 아래 설정을 자동으로 무시한다.
-        capture.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
-        capture.set(cv2.CAP_PROP_EXPOSURE, exposure)
+    camera_status = configure_camera_exposure(capture, auto_exposure, exposure)
+    if diagnostics is not None:
+        diagnostics.update(camera_status)
 
     return capture
 
@@ -980,7 +1080,8 @@ def run_system(args):
             db_path = os.path.join(PARENT_DIR, "robot_arm.db")
             db = DBManager(db_path)
             ser = open_serial(args.serial_port, args.simulation)
-        cap = open_camera(camera_index, args.auto_exposure, args.exposure)
+        camera_diagnostics = {}
+        cap = open_camera(camera_index, args.auto_exposure, args.exposure, camera_diagnostics)
 
         if cap is None:
             print(f"[카메라 오류] {camera_index}번 카메라를 열 수 없습니다.")
@@ -991,6 +1092,7 @@ def run_system(args):
             print(f"[카메라 오류] {camera_index}번 카메라에서 영상을 읽을 수 없습니다.")
             return 1
 
+        refresh_camera_exposure(cap, camera_diagnostics, verbose=True)
         probe_frame = flip_frame(probe_frame, args.flip)
         frame_height, frame_width = probe_frame.shape[:2]
         grid_width = max(frame_width // 3, 1)
@@ -1017,6 +1119,7 @@ def run_system(args):
             print(f"  저장 위치: {os.path.abspath(args.feedback_dir)}")
             print("  N: 실제 정상 저장 | D: 실제 불량 저장 | Q: 종료")
         print("  종료: 영상 창에서 Q")
+        print("  카메라 조정: S로 설정 창 열기 | 창을 닫은 후 영상 창에서 R로 노출 재조회")
 
         fail_count = 0
         last_action_time = 0.0
@@ -1132,10 +1235,16 @@ def run_system(args):
 
                 cv2.imshow(MASK_WINDOW, white_mask)
                 cv2.imshow(EDGE_WINDOW, edges)
-                cv2.imshow(MAIN_WINDOW, display_frame)
+                cv2.imshow(MAIN_WINDOW, draw_camera_status(display_frame, camera_diagnostics))
                 key = cv2.waitKey(1) & 0xFF
                 if key in (ord("q"), ord("Q"), 27):
                     break
+                if key in (ord("s"), ord("S"), ord("r"), ord("R")):
+                    if key in (ord("s"), ord("S")):
+                        open_camera_settings(cap, camera_diagnostics)
+                    else:
+                        refresh_camera_exposure(cap, camera_diagnostics, verbose=True)
+                    continue
 
                 label = None
                 if key in (ord("n"), ord("N")):
@@ -1271,11 +1380,25 @@ def run_system(args):
 
             cv2.imshow(MASK_WINDOW, white_mask)
             cv2.imshow(EDGE_WINDOW, edges)
-            cv2.imshow(MAIN_WINDOW, display_frame)
+            cv2.imshow(MAIN_WINDOW, draw_camera_status(display_frame, camera_diagnostics))
 
             key = cv2.waitKey(1) & 0xFF
             if key in (ord("q"), ord("Q"), 27):
                 break
+
+            if key in (ord("s"), ord("S"), ord("r"), ord("R")):
+                # 노출 조정/조회 중에는 이미 확인된 후보도 버리고 재승인을 기다린다.
+                inspection_armed = False
+                armed_at = 0.0
+                stable_ball = None
+                stable_count = 0
+                action_ball = None
+                print("[검사 일시 정지] 카메라 조정 후 SPACE로 다시 승인하세요.")
+                if key in (ord("s"), ord("S")):
+                    open_camera_settings(cap, camera_diagnostics)
+                else:
+                    refresh_camera_exposure(cap, camera_diagnostics, verbose=True)
+                continue
 
             if key == ord(" ") and not waiting_for_clear and cooldown_remaining <= 0:
                 inspection_armed = not inspection_armed
