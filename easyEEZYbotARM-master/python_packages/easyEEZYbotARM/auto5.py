@@ -51,7 +51,7 @@ EDGE_WINDOW = "X-Ray (Edges)"
 DEFAULT_CAMERA_INDEX = 0
 DEFAULT_SERIAL_PORT = "COM3"
 DEFAULT_MODEL_PATH = os.path.abspath(
-    os.path.join(BASE_DIR, "..", "..", "models", "ball_quality_svm_v3.xml")
+    os.path.join(BASE_DIR, "..", "..", "models", "ball_quality_svm_v4.xml")
 )
 DEFAULT_FEEDBACK_DIR = os.path.abspath(
     os.path.join(BASE_DIR, "..", "..", "training_data", "live_feedback")
@@ -175,8 +175,8 @@ def parse_args():
     parser.add_argument(
         "--exposure",
         type=float,
-        default=-8.0,
-        help="수동 노출값 (기본값: -8)",
+        default=-3.0,
+        help="수동 노출값 (기본값: -3)",
     )
     parser.add_argument(
         "--auto-exposure",

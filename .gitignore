@@ -223,9 +223,9 @@ __marimo__/
 # 로컬에서 수집한 기계학습 사진과 학습 기록
 easyEEZYbotARM-master/training_data/raw/
 easyEEZYbotARM-master/training_data/prepared/
-easyEEZYbotARM-master/training_data/live_feedback/
+easyEEZYbotARM-master/training_data/live_feedback*/
 
-# 이전 모델은 제외하고 현재 사용하는 v3 모델만 GitHub에 올린다.
+# 이전 모델은 제외하고 현재 사용하는 모델만 GitHub에 올린다.
 easyEEZYbotARM-master/models/ball_quality_svm.xml
 easyEEZYbotARM-master/models/ball_quality_svm.json
 easyEEZYbotARM-master/models/ball_quality_svm_v2.xml

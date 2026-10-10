@@ -1,8 +1,8 @@
 """OpenCV로 정상·불량 탁구공 SVM 분류기를 학습한다.
 
-HOG·명암·엣지·외곽 특징을 사용한다. 기존 승인 사진과 실시간 피드백 사진을
-합치고, 피드백 사진 일부는 평가용으로 분리한 뒤 최종 모델은 전체 사진으로
-다시 학습한다. 별도 키 조작 없이 실행하면 모델과 결과 파일이 저장된다.
+HOG·명암·엣지·외곽 특징을 사용한다. 기본값은 기존 승인 사진과 실시간
+피드백 사진을 합치며, ``--feedback-only``를 지정하면 현재 촬영 환경의
+피드백 사진만 사용한다. 평가 후 최종 모델은 선택된 전체 사진으로 다시 학습한다.
 """
 
 from __future__ import annotations
@@ -65,6 +65,11 @@ def parse_args() -> argparse.Namespace:
         "--no-feedback",
         action="store_true",
         help="실시간 피드백 사진을 빼고 기존 승인 사진만 학습합니다.",
+    )
+    parser.add_argument(
+        "--feedback-only",
+        action="store_true",
+        help="기존 승인 사진을 제외하고 현재 피드백 사진만 학습합니다.",
     )
     parser.add_argument(
         "--test-ratio",
@@ -324,6 +329,8 @@ def class_recall(confusion: np.ndarray, label_number: int) -> float:
 
 def main() -> int:
     args = parse_args()
+    if args.no_feedback and args.feedback_only:
+        raise SystemExit("--no-feedback과 --feedback-only는 함께 사용할 수 없습니다.")
     if not (0.10 <= args.test_ratio <= 0.40):
         raise SystemExit("--test-ratio는 0.10에서 0.40 사이여야 합니다.")
 
@@ -333,7 +340,7 @@ def main() -> int:
     report_path = manifest_path.parent / f"{model_path.stem}_report.csv"
     metadata_path = model_path.with_suffix(".json")
 
-    rows = load_manifest(manifest_path)
+    rows = [] if args.feedback_only else load_manifest(manifest_path)
     if not args.no_feedback:
         rows.extend(load_feedback_rows(feedback_dir))
     samples = load_images(rows, manifest_path)
@@ -368,7 +375,9 @@ def main() -> int:
             args.test_ratio,
             args.seed,
         )
-        split_strategy = "live_feedback_holdout"
+        split_strategy = (
+            "feedback_only_holdout" if args.feedback_only else "live_feedback_holdout"
+        )
     else:
         train_samples, test_samples = stratified_split(
             samples,
@@ -384,18 +393,24 @@ def main() -> int:
 
     print("\n탁구공 정상·불량 분류기 학습을 시작합니다.")
     print(f"  전체 원본: 정상 {label_counts['normal']}장 / 불량 {label_counts['damaged']}장")
-    print(
-        "  기존 승인 사진: "
-        f"정상 {source_counts['prepared']['normal']}장 / "
-        f"불량 {source_counts['prepared']['damaged']}장"
-    )
+    if args.feedback_only:
+        print("  기존 승인 사진: 제외")
+    else:
+        print(
+            "  기존 승인 사진: "
+            f"정상 {source_counts['prepared']['normal']}장 / "
+            f"불량 {source_counts['prepared']['damaged']}장"
+        )
     if not args.no_feedback:
         print(
             "  새 피드백 사진: "
             f"정상 {source_counts['live_feedback']['normal']}장 / "
             f"불량 {source_counts['live_feedback']['damaged']}장"
         )
-        print("  시험 방식: 새 피드백 사진 중 25%를 학습에서 제외하여 평가")
+        print(
+            "  시험 방식: 현재 피드백 사진 중 "
+            f"{args.test_ratio * 100:.0f}%를 학습에서 제외하여 평가"
+        )
     print(f"  평가용 학습 원본: {len(train_samples)}장")
     print(f"  평가용 학습 입력(증강 포함): {len(train_labels)}장")
     print(f"  시험 원본: {len(test_samples)}장")
@@ -473,10 +488,7 @@ def main() -> int:
     print(f"모델 정보: {metadata_path}")
     print(f"시험 상세 기록: {report_path}")
     if not args.no_feedback:
-        print(
-            "\n참고: 시험 점수는 새 피드백 사진의 홀드아웃 결과입니다. "
-            "학교 환경 사진은 v4에서 별도로 검증합니다."
-        )
+        print("\n참고: 시험 점수는 현재 피드백 사진의 홀드아웃 결과입니다.")
     return 0
 
 

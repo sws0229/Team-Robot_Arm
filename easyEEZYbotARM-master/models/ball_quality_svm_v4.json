@@ -1,0 +1,44 @@
+{
+  "model_type": "OpenCV linear SVM",
+  "feature_type": "filled-ball mask + focused HOG + grayscale appearance + Canny edge map + contour mask",
+  "image_size": 64,
+  "label_to_number": {
+    "normal": 0,
+    "damaged": 1
+  },
+  "trained_at": "2026-10-10T17:35:26",
+  "seed": 42,
+  "test_ratio": 0.25,
+  "augmentation": true,
+  "dataset_counts": {
+    "normal": 60,
+    "damaged": 60
+  },
+  "dataset_source_counts": {
+    "prepared": {
+      "normal": 0,
+      "damaged": 0
+    },
+    "live_feedback": {
+      "normal": 60,
+      "damaged": 60
+    }
+  },
+  "split_strategy": "feedback_only_holdout",
+  "evaluation_training_original_count": 90,
+  "evaluation_training_input_count": 630,
+  "test_count": 30,
+  "test_accuracy": 1.0,
+  "confusion_matrix": [
+    [
+      15,
+      0
+    ],
+    [
+      0,
+      15
+    ]
+  ],
+  "training_original_count": 120,
+  "training_input_count": 840
+}
